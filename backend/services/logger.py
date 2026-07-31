@@ -1,51 +1,45 @@
-"""Production-grade logging utilities for NOVAPIPS AI."""
+"""Production-grade logging service for NOVAPIPS AI."""
 
 from __future__ import annotations
 
 import logging
 import sys
+import threading
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Final
-from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
-
-try:
-    from colorama import Fore, Style, init as colorama_init
-except ImportError:  # pragma: no cover - optional dependency
-    Fore = Style = None  # type: ignore[assignment]
-    colorama_init = None
+from typing import Any
 
 
-class ColoredFormatter(logging.Formatter):
-    """Apply ANSI colors to console logs when color support is available."""
+class _ComponentFilter(logging.Filter):
+    """Filter records by component when routing to specific files."""
 
-    COLORS: Final[dict[str, str]] = {
-        "DEBUG": Fore.CYAN if Fore is not None else "",
-        "INFO": Fore.GREEN if Fore is not None else "",
-        "WARNING": Fore.YELLOW if Fore is not None else "",
-        "ERROR": Fore.RED if Fore is not None else "",
-        "CRITICAL": Fore.RED + Style.BRIGHT if Fore is not None else "",
-    }
+    def __init__(self, component: str | None = None, level: int | None = None) -> None:
+        """Initialize the filter with an optional component and level."""
+        super().__init__()
+        self.component = component
+        self.level = level
 
-    def format(self, record: logging.LogRecord) -> str:
-        """Return a colorized message for console output."""
-        if colorama_init is not None:
-            colorama_init(autoreset=True)
-        message = super().format(record)
-        color = self.COLORS.get(record.levelname, "")
-        if color:
-            return f"{color}{message}{Style.RESET_ALL}" if Style is not None else message
-        return message
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return True when the record should be emitted by this handler."""
+        if self.level is not None and record.levelno < self.level:
+            return False
+        if self.component is not None and getattr(record, "component", None) != self.component:
+            return False
+        return True
 
 
-class NovaPipsLogger:
-    """Singleton logger configured for console and file output."""
+class LoggerService:
+    """Singleton logger service with console and rotating file handlers."""
 
-    _instance: NovaPipsLogger | None = None
+    _instance: LoggerService | None = None
+    _lock = threading.Lock()
 
-    def __new__(cls, *args: Any, **kwargs: Any) -> "NovaPipsLogger":
-        """Ensure a single logger instance is created per process."""
+    def __new__(cls, *args: Any, **kwargs: Any) -> "LoggerService":
+        """Ensure only one logger service instance exists per process."""
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
         return cls._instance
 
     def __init__(self) -> None:
@@ -55,13 +49,8 @@ class NovaPipsLogger:
         self._initialized = True
         self._logger = self._build_logger()
 
-    @classmethod
-    def get_instance(cls) -> "NovaPipsLogger":
-        """Return the singleton logger instance."""
-        return cls()
-
     def _build_logger(self) -> logging.Logger:
-        """Create a named logger with console and file handlers."""
+        """Create the configured logger with console and file handlers."""
         logger = logging.getLogger("novapips.ai")
         logger.setLevel(self._resolve_log_level())
         logger.propagate = False
@@ -74,37 +63,40 @@ class NovaPipsLogger:
 
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(self._resolve_log_level())
-        console_handler.setFormatter(ColoredFormatter(formatter._fmt, formatter.datefmt))
+        console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
 
         log_dir = Path(__file__).resolve().parents[2] / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
 
-        rotating_file = RotatingFileHandler(
-            log_dir / "novapips-ai.log",
-            maxBytes=5 * 1024 * 1024,
-            backupCount=5,
-            encoding="utf-8",
-        )
-        rotating_file.setLevel(self._resolve_log_level())
-        rotating_file.setFormatter(formatter)
-        logger.addHandler(rotating_file)
+        file_specs: list[tuple[str, str | None, int]] = [
+            ("app.log", None, self._resolve_log_level()),
+            ("signals.log", "signals", self._resolve_log_level()),
+            ("trades.log", "trades", self._resolve_log_level()),
+            ("news.log", "news", self._resolve_log_level()),
+            ("ai.log", "ai", self._resolve_log_level()),
+            ("errors.log", None, logging.ERROR),
+        ]
 
-        daily_file = TimedRotatingFileHandler(
-            log_dir / "novapips-ai.daily.log",
-            when="midnight",
-            interval=1,
-            backupCount=7,
-            encoding="utf-8",
-        )
-        daily_file.setLevel(self._resolve_log_level())
-        daily_file.setFormatter(formatter)
-        logger.addHandler(daily_file)
+        for filename, component, level in file_specs:
+            handler = RotatingFileHandler(
+                log_dir / filename,
+                maxBytes=5 * 1024 * 1024,
+                backupCount=5,
+                encoding="utf-8",
+            )
+            handler.setLevel(level)
+            handler.setFormatter(formatter)
+            if component is not None:
+                handler.addFilter(_ComponentFilter(component=component))
+            elif filename == "errors.log":
+                handler.addFilter(_ComponentFilter(level=logging.ERROR))
+            logger.addHandler(handler)
 
         return logger
 
     def _resolve_log_level(self) -> int:
-        """Read the configured log level from settings with a safe fallback."""
+        """Resolve the configured log level from settings with a safe fallback."""
         try:
             from backend.config.settings import get_settings
 
@@ -113,36 +105,55 @@ class NovaPipsLogger:
         except Exception:
             return logging.INFO
 
+    def _emit(self, level: int, message: str, component: str | None = None) -> None:
+        """Emit a log entry with optional routing metadata."""
+        extra: dict[str, Any] = {}
+        if component is not None:
+            extra["component"] = component
+        self._logger.log(level, message, extra=extra)
+
     @property
     def logger(self) -> logging.Logger:
-        """Expose the configured logger instance."""
+        """Return the underlying logger instance."""
         return self._logger
 
-    def log_signal(self, message: str, *, level: int = logging.INFO, **context: Any) -> None:
-        """Log a signal event with optional structured context."""
-        self._log_event("SIGNAL", message, level, context)
+    def debug(self, message: str) -> None:
+        """Log a DEBUG message."""
+        self._emit(logging.DEBUG, message)
 
-    def log_news(self, message: str, *, level: int = logging.INFO, **context: Any) -> None:
-        """Log a news event with optional structured context."""
-        self._log_event("NEWS", message, level, context)
+    def info(self, message: str) -> None:
+        """Log an INFO message."""
+        self._emit(logging.INFO, message)
 
-    def log_trade(self, message: str, *, level: int = logging.INFO, **context: Any) -> None:
-        """Log a trade event with optional structured context."""
-        self._log_event("TRADE", message, level, context)
+    def warning(self, message: str) -> None:
+        """Log a WARNING message."""
+        self._emit(logging.WARNING, message)
 
-    def log_ai(self, message: str, *, level: int = logging.INFO, **context: Any) -> None:
-        """Log an AI-related event with optional structured context."""
-        self._log_event("AI", message, level, context)
+    def error(self, message: str) -> None:
+        """Log an ERROR message."""
+        self._emit(logging.ERROR, message)
 
-    def _log_event(self, prefix: str, message: str, level: int, context: dict[str, Any]) -> None:
-        """Emit a structured log message to all configured handlers."""
-        details = " | ".join(f"{key}={value}" for key, value in sorted(context.items()))
-        payload = f"{prefix} | {message}"
-        if details:
-            payload = f"{payload} | {details}"
-        self.logger.log(level, payload)
+    def critical(self, message: str) -> None:
+        """Log a CRITICAL message."""
+        self._emit(logging.CRITICAL, message)
+
+    def log_signal(self, signal: Any) -> None:
+        """Log a signal event."""
+        self._emit(logging.INFO, f"Signal: {signal}", component="signals")
+
+    def log_trade(self, trade: Any) -> None:
+        """Log a trade event."""
+        self._emit(logging.INFO, f"Trade: {trade}", component="trades")
+
+    def log_news(self, news: Any) -> None:
+        """Log a news event."""
+        self._emit(logging.INFO, f"News: {news}", component="news")
+
+    def log_ai(self, message: str) -> None:
+        """Log an AI-related message."""
+        self._emit(logging.INFO, message, component="ai")
 
 
-def get_logger() -> logging.Logger:
-    """Return the configured singleton logger instance."""
-    return NovaPipsLogger.get_instance().logger
+def get_logger() -> LoggerService:
+    """Return the singleton logger service."""
+    return LoggerService()
