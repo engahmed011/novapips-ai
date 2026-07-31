@@ -1,0 +1,24 @@
+"""Shared configuration constants for the NOVAPIPS AI backend."""
+
+from typing import Final
+
+APP_NAME_ENV_VAR: Final[str] = "APP_NAME"
+APP_VERSION_ENV_VAR: Final[str] = "APP_VERSION"
+ENVIRONMENT_ENV_VAR: Final[str] = "ENVIRONMENT"
+LOG_LEVEL_ENV_VAR: Final[str] = "LOG_LEVEL"
+
+TELEGRAM_BOT_TOKEN_ENV_VAR: Final[str] = "TELEGRAM_BOT_TOKEN"
+TELEGRAM_PUBLIC_CHAT_ID_ENV_VAR: Final[str] = "TELEGRAM_PUBLIC_CHAT_ID"
+TELEGRAM_VIP_CHAT_ID_ENV_VAR: Final[str] = "TELEGRAM_VIP_CHAT_ID"
+
+OANDA_API_KEY_ENV_VAR: Final[str] = "OANDA_API_KEY"
+OANDA_ACCOUNT_ID_ENV_VAR: Final[str] = "OANDA_ACCOUNT_ID"
+
+FIREBASE_PROJECT_ID_ENV_VAR: Final[str] = "FIREBASE_PROJECT_ID"
+FIREBASE_CLIENT_EMAIL_ENV_VAR: Final[str] = "FIREBASE_CLIENT_EMAIL"
+FIREBASE_PRIVATE_KEY_ENV_VAR: Final[str] = "FIREBASE_PRIVATE_KEY"
+
+OPENAI_API_KEY_ENV_VAR: Final[str] = "OPENAI_API_KEY"
+
+VALID_ENVIRONMENTS: Final[tuple[str, ...]] = ("development", "staging", "production")
+VALID_LOG_LEVELS: Final[tuple[str, ...]] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
