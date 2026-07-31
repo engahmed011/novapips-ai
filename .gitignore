@@ -1,0 +1,32 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Virtual environments
+.venv/
+
+# Environment files
+.env
+
+# Editor and IDE files
+.vscode/
+.idea/
+
+# Testing and coverage
+coverage/
+htmlcov/
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+
+# macOS and Windows system files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
